@@ -1,0 +1,502 @@
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import dataUnit.TRule;
+import dataUnit.TRules;
+
+/**
+ * This class generate Topics Rational Association Rules based on the utility-based association rules and topic modeling
+ *  
+ * @author Xing Zhao
+ *
+ */
+public class AssocRulesTopics {
+    // the topics that will be used to generate the rules
+	protected List<String> topicList;
+	// single item map its probability from DB
+    protected Map<String, Double> singleItemProb;
+    // newsID map list of topicID with associated support probability
+    protected Map<String, Map<String, Double>> newsToTopicProb;
+	// the news rule mined from Assoc Rule alg, use consequent as key for retrieve
+	protected Map<String, List<TRule>> newsRules;
+
+	// save mined topic rules
+	protected TRules topicRules;
+	// object to write the output file if the user wish to write to a file
+	protected BufferedWriter writer = null;
+	// for statistics
+	protected final static double EPSILON = 0.00001; // precision for double comparison
+	protected final static int topicSize = 2;	// define one to one topic inference
+	protected long startTimestamp = 0; // last execution start time
+	protected long endTimestamp = 0;   // last execution end time
+	double maxMemory = 0;     		// the maximum memory usage
+	protected int rulesCount = 0;  // number of rules generated
+	protected int totalTopics = 0; // number of topics in TopicDB
+	// parameters
+	protected double minconf; // minimum topic probability confidence
+	
+	/**
+	 * Default constructor
+	 */
+	public AssocRulesTopics(){
+		
+	}
+	
+	/**
+	 * Find all qualified topic association rules according to paper
+	 * @param huiPattern, file contains HUIminer results with local utility array from the news dataset
+	 * @param newsTopicDB, file contains Topic Modeling result such as (news, topic, probability)
+	 * @param output, output file contains result topic pattern
+	 * @param DButility, total utility of the DB
+	 * @param minPconf, minimum probability confidence based on utility
+	 */
+	public TRules runAlgorithm(String huiPattern, String newsTopicDB, String output, int DButility, double minPconf) throws IOException{
+		if(newsRules == null){
+			throw new IOException("run loadNewsRules first!");
+		}
+		maxMemory =0;
+		// save the parameters
+		this.minconf = minPconf;
+		totalTopics = 0;
+		topicList = new ArrayList<String>();
+		topicRules = new TRules("TOPIC ASSOCIATION RULES", minPconf);
+		// load single news probability
+		singleItemProb = probDistList(huiPattern, DButility);
+		// check the memory usage
+		checkMemory();
+		// load news topics probability
+		newsToTopicProb = loadMapNewsTopics(newsTopicDB);
+		// check the memory usage
+		checkMemory();
+		// load topic list
+		// get 1st entry of the Map
+		Map.Entry<String, Map<String, Double>> entry = newsToTopicProb.entrySet().iterator().next();
+		Map<String, Double> topicDist = entry.getValue();
+		
+		for(String e: topicDist.keySet()){
+			if(!topicList.contains(e)){
+				topicList.add(e);
+			}
+		}
+		
+		totalTopics = topicList.size();
+		// start the algorithm
+		runAlgorithm(output);
+		return topicRules;		
+	}
+	
+	/**
+	 * Run the algorithm for generating association rules from a list of topics.
+	 * @param patterns the set of itemsets
+	 * @param output the output file path. If null the result is saved in memory and returned by the method.
+	 * @param databaseSize  the number of transactions in the original database
+	 * @return the set of rules found if the user chose to save the result to memory
+	 * @throws IOException exception if error while writting to file
+	 */
+	private void runAlgorithm(String output)throws IOException {
+		startTimestamp = System.currentTimeMillis();
+		writer = new BufferedWriter(new FileWriter(output)); 
+		// initialize variable to count the number of rules found
+		rulesCount = 0;
+		
+		String[] topicArray = topicList.toArray(new String[0]);
+		
+		combination(topicArray, topicSize);	
+	
+		// sort rules by confidence in descending order
+		topicRules.sortByConfidence();		
+		// save to file
+		saveSortedRule(topicRules); // text presentation
+		// check the memory usage again and close the file.
+		checkMemory();
+		// close the file if we saved the result to a file
+		if(writer != null){
+			writer.close();
+		}
+		
+		endTimestamp = System.currentTimeMillis();
+		
+	}
+	
+	/**
+	 * Generate unique subsets of the subset
+	 * 
+	 * @param antec
+	 *            UItemset antecedent
+	 * @param antec
+	 *            UItemset consequent
+	 * @param K
+	 *            size of the combination set among antecedent
+	 */
+	public void combination(String [] topics, int K) {
+		// get the length of the array
+		// e.g. for {'A','B','C','D'} => N = 4
+
+		int N = topics.length;
+
+		if (K > N || K < 1) {
+			System.out.println("Invalid input, K > N or K < 1");
+			return;
+		}
+
+		// calculate the possible combinations
+		// e.g. c(4,2)
+		// c(N,K);
+
+		// get the combination by index
+		// e.g. 01 --> AB , 23 --> CD
+		int combination[] = new int[K];
+
+		// position of current index
+		// if (r = 1) r*
+		// index ==> 0 | 1 | 2
+		// element ==> A | B | C
+		int r = 0;
+		int index = 0;
+
+		while (r >= 0) {
+			// possible indexes for 1st position "r=0" are "0,1,2" --> "A,B,C"
+			// possible indexes for 2nd position "r=1" are "1,2,3" --> "B,C,D"
+
+			// for r = 0 ==> index < (4+ (0 - 2)) = 2
+			if (index <= (N + (r - K))) {
+				combination[r] = index;
+
+				// if we are at the last position print and increase the index
+				if (r == K - 1) {
+
+					// do something with the combination e.g. add to list or
+					// print
+					// print(combination, elements);
+					addSet(combination, topics);
+					index++;
+				} else {
+					// select index for next position
+					index = combination[r] + 1;
+					r++;
+				}
+			} else {
+				r--;
+				if (r > 0)
+					index = combination[r] + 1;
+				else
+					index = combination[0] + 1;
+			}
+		}
+	}
+
+	/**
+	 * Generate combination of topics given by specified size
+	 * from method combination and pass the result to method 
+	 * topicRuleGen
+	 * @param combinationIndex
+	 *            combination sequence of index
+	 * @param topics
+	 *            array of unique topics
+	 */
+	public void addSet(int[] combinationIndex, String [] topics) {
+		/* generated combination set*/
+		String[] one2one = new String[combinationIndex.length];
+		// get combination set from X
+		for (int i = 0; i < combinationIndex.length; i++) {
+			one2one[i] = topics[combinationIndex[i]];
+		}
+		
+		String topic1 = one2one[0];
+		String topic2 = one2one[1];
+		/* check topic1 -> topic2 */
+		topicRuleGen(topic1, topic2);
+		/* check topic2 -> topic1 */
+		topicRuleGen(topic2, topic1);	
+	}
+
+	/**
+	 * Evaluate the give two topics and save the topic rule if 
+	 * they satisfied the condition described in paper
+	 * @param topic1	antecedent topic
+	 * @param topic2	consequent topic
+	 */
+	public void topicRuleGen(String topic1, String topic2){
+		/* check topic1 to topic2 */
+		// P(t2|t1) = numerator / denominator
+		double numerator = 0.0;
+		double denominator = 0.0;
+
+		// nw is consequent news of a rule
+		for(String nw: newsRules.keySet()){
+			double p_nw = 0.0; // get P(nw|NW) newsCondition
+			List<TRule> nwRules = newsRules.get(nw); // nw'->nw
+			for(TRule r : nwRules){ // r is news rules which uses TRule for storage
+				/* if nw is not HUI, skip it */
+				if(singleItemProb.get(r.getTopic1()) == null){
+					continue;
+				}
+				// get P(nw')
+				double p_singleNW = singleItemProb.get(r.getTopic1());
+				// P(nw|NW) = sum(P(nw|nw')P(nw'))
+				p_nw += r.getProbConf() * p_singleNW;
+			}
+			/* if the nw not in topic model dataset */
+			if (newsToTopicProb.get(nw) == null){
+				continue;
+			}
+			
+			double p_t1_nw = 0.0;// P(t1|nw)
+			//System.out.println(nw + "\n");
+			p_t1_nw = newsToTopicProb.get(nw).get(topic1);
+			// sum(P(nw)P(t1|nw))
+			denominator += p_nw * p_t1_nw;
+			
+			double p_t2_nw = 0.0; // P(t2|nw)
+			p_t2_nw = newsToTopicProb.get(nw).get(topic2);
+			// sum(P(nw)P(t2|nw)P(t1|nw))
+			numerator += p_nw * p_t2_nw * p_t1_nw;
+			//System.out.println(numerator+"/"+denominator); 
+		}
+		
+		if (denominator > 0){
+			double tpconf = numerator / denominator;
+			//System.out.println(tpconf);	
+			if (tpconf > minconf){
+				topicRules.addRule(new TRule(topic1, topic2, tpconf));
+			}
+		}
+		// do nothing if denominator == 0
+	}
+	
+	/**
+	 * remove after finalized
+	 * find intersect or common news of topic1 and topic2
+	 * @param t1	topic1
+	 * @param t2	topic2
+	 * @param newsTopics	newsTopics Map
+	 * @return list of intersect news of topic1 and topic2
+	 */
+	public static List<String> intersect(String t1, String t2, Map<String, Map<String, Double>> newsTopics){
+		List<String> intersectNews = new ArrayList<String>();
+		List<String> newsT1 = new ArrayList<String>();
+		List<String> newsT2 = new ArrayList<String>();
+		/* collect news for t1 and t2 */
+		for(String e: newsTopics.keySet()){
+			Map<String, Double> topic = newsTopics.get(e);
+			
+			if(topic.containsKey(t1)){
+				newsT1.add(e);
+			}
+			
+			if(topic.containsKey(t2)){
+				newsT2.add(e);
+			}
+		}
+		/* get intersect news */
+		for(String n: newsT1){
+			if(newsT2.contains(n)){
+				intersectNews.add(n);
+			}
+		}		
+		return intersectNews;
+	}
+	
+	/**
+	 * load news rules and rule utility confidence
+	 * @param newsRule 	news rules
+	 * @throws IOException 
+	 */
+	public void loadNewsRules(String newsRule) throws IOException{
+		BufferedReader ruleReader = null;
+		newsRules = new HashMap<String, List<TRule>>();
+		String entryLine;
+		
+		try{
+			ruleReader = new BufferedReader(new InputStreamReader(new FileInputStream(new File(newsRule))));
+			// for each line (mapping entry) until the end of the file
+			while ((entryLine = ruleReader.readLine()) != null) {
+				// if the line is empty
+				if (entryLine.isEmpty() == true || entryLine.charAt(0) == '#') {
+					continue;
+				}
+				//split the transaction according to the separator
+				String split[] = entryLine.split("#Rule Utility:");
+				
+				String newsSet[] = split[0].split(" ==> ");
+				
+				String uconfStr[] = split[1].split("#UCONF: "); 
+				
+				TRule nRule = new TRule(newsSet[0], newsSet[1], Double.parseDouble(uconfStr[1]));
+				
+				String consq = newsSet[1]; // use consequent as index of Map newsRules
+				
+				List<TRule> temp;
+				
+				if(newsRules.containsKey(consq)){	// update or add rules
+					newsRules.get(consq).add(nRule); // need to verify adding
+				}else{								// create new entry
+					temp = new ArrayList<TRule>();
+					temp.add(nRule);
+					newsRules.put(consq, temp);
+				}
+			}
+			
+		}catch (Exception e) {
+        	// catches exception if error while reading the input file
+        	e.printStackTrace();
+        }finally {
+        	if(ruleReader != null){
+        		ruleReader.close();
+        	}
+        }
+	}
+	
+	/**
+	 * Load mappingDB to the search Map "newsIDtoTopicID_prob"
+	 * @param mapfile - the mapping database with sets <newsID, topicID_i, probability_i,...>, i = N
+	 * @return a HashMap with <newsID, topicID>
+	 * @throws IOException
+	 */
+	public static Map<String, Map<String, Double>> loadMapNewsTopics(String mapfile) throws IOException{
+		// map contains all newsID to topicID for translation from newsID to topicID
+		HashMap<String, Map<String, Double>> newsMapTopic = new HashMap<String, Map<String, Double>>();
+		BufferedReader myMappingDB = null;
+		
+		String entryLine;
+		
+		try{
+			myMappingDB = new BufferedReader(new InputStreamReader(new FileInputStream(new File(mapfile))));
+			// for each line (mapping entry) until the end of the file
+			while ((entryLine = myMappingDB.readLine()) != null) {
+				// if the line is empty
+				if (entryLine.isEmpty() == true || entryLine.charAt(0) == '#') {
+					continue;
+				}
+				//split the transaction according to the " # " separator
+				String split[] = entryLine.split("\t");
+				
+				Map<String, Double> probDist = new HashMap<String, Double>();
+				// get <topic, prob> from split[1...n]
+				for(int i = 1; i < split.length - 1; i = i + 2){
+					//if(i % 2 == 1){ // odd index
+					probDist.put(split[i].trim(), Double.parseDouble(split[i+1].trim()));
+					//} // skip even index
+				}			
+				newsMapTopic.put(split[0].trim(), probDist);
+			}
+			
+		}catch (Exception e) {
+        	// catches exception if error while reading the input file
+        	e.printStackTrace();
+        }finally {
+        	if(myMappingDB != null){
+        		myMappingDB.close();
+        	}
+        }
+		return newsMapTopic;
+	}
+	
+	
+	/**
+	 * Collect each high utility news item's probability distribution from user clickstream dataset based on its utility 
+	 * @param huiminedPattern , a file contains HUI mined patterns and associated Utility array list
+	 * @return a list of pair with <newsId:probability> of this newsId
+	 * @throws IOException 
+ 	 */
+	public static Map<String, Double> probDistList(String huiminedPattern, int utilityDB) throws IOException{
+		
+		if(utilityDB <= 0){
+			System.out.println("utilityDB must be positive");
+			return null;
+		}
+		
+		Map<String, Double> probDist = new HashMap<String, Double>();
+		
+		BufferedReader patternInput = null;
+		String eachLine; // each line of the huiminedPattern
+		try{
+			// prepare the object for reading the file
+			patternInput = new BufferedReader(new InputStreamReader( new FileInputStream(new File(huiminedPattern))));
+			// for each line (transaction) until the end of file
+			while ((eachLine = patternInput.readLine()) != null) {
+				// if the line is  a comment, is  empty or is a
+				// kind of metadata
+				if (eachLine.isEmpty() == true) {
+					continue;
+				}
+				
+				// split the transaction according to the : separator
+				String split[] = eachLine.trim().split(" #UTIL: "); 
+				// the first part is the list of items
+				String items[] = split[0].split(" "); 
+				// load HUI string to HUI set : stores sorted HUIs in ascending order for later verification
+				// HUIset.add(sortStrArray(items));
+				// the second part is the total utility and utility array
+				String utilityANDuarray[] = split[1].split("#UARY: ");
+				// the utility of the itemset
+				int totalUtility = Integer.parseInt(utilityANDuarray[0]);
+				// collect single item probability
+				if(items.length == 1){
+					probDist.put(items[0],  totalUtility / (double) utilityDB);
+				}
+			}
+			
+		}catch (Exception e) {
+			// catches exception if error while reading the input file
+			e.printStackTrace();
+		}finally {
+			if(patternInput != null){
+				patternInput.close();
+			}
+	    }
+		return probDist;
+	}
+	/**
+	 * Save a rule to the output file or in memory depending
+	 * if the user has provided an output file path or not
+	 * @param rules  topic association rules
+	 * @throws IOException exception if error writing the output file
+	 */
+	protected void saveSortedRule(TRules rules) throws IOException {
+		// if the result should be saved to a file
+		rulesCount = rules.size();
+		if(writer != null){				
+			// create a string buffer
+			StringBuilder buffer = new StringBuilder();
+			buffer.append(rules.toString());
+			writer.write(buffer.toString());					
+		}	
+		
+	}
+	
+	/**
+	 * Method to check the memory usage and keep the maximum memory usage.
+	 */
+	private void checkMemory() {
+		// get the current memory usage
+		double currentMemory = (Runtime.getRuntime().totalMemory() -  Runtime.getRuntime().freeMemory())
+				/ 1024d / 1024d;
+		// if higher than the maximum until now
+		if (currentMemory > maxMemory) {
+			// replace the maximum with the current memory usage
+			maxMemory = currentMemory;
+		}
+	}
+	
+	/**
+	 * Print statistics about the latest execution to System.out.
+	 */
+	public void printStats() {
+		System.out.println("=============  Association Rule ALGORITHM - STATS =============");
+		System.out.println(" Total time ~ " + (endTimestamp - startTimestamp) + " ms");
+		System.out.println(" Memory ~ " + maxMemory+ " MB");
+		System.out.println(" Total topics count : " + totalTopics); 
+		System.out.println(" Number of Rules generated : " + rulesCount); 
+		System.out.println("===================================================");
+	}
+}
