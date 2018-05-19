@@ -1,7 +1,7 @@
 # News-recommendation-system-using-utility-mining
 Data Mining Project
 
-This is the summer resarch project I did with Dr. Morteza Zihayat.
+This is the summer research project I did with Dr. Morteza Zihayat.
 
 We built a news recommendation system using utility mining technique. 
 
